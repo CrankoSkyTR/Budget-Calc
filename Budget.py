@@ -282,6 +282,13 @@ with st.sidebar:
                 rebuild_plan_for_operation(op, months)
 
     st.divider()
+    st.subheader("Brut Multiplier")
+    brut_multiplier = st.slider("Brut Multiplier", 1.0, 3.0, 1.58, 0.01)
+    
+    st.subheader("Shrinkage %")
+    shrinkage_pct = st.slider("Shrinkage %", 0.0, 100.0, 0.0, 0.5) / 100.0
+
+    st.divider()
     st.subheader("COLA %")
     cola_pct = st.number_input(
         "COLA % (decimal)", value=0.0, step=0.01, format="%.4f")
@@ -291,14 +298,6 @@ with st.sidebar:
         st.session_state.plan_df["Month"].unique().tolist())
     cola_start_month = st.selectbox(
         "Apply COLA starting month", options=months_for_cola, index=0)
-
-    st.divider()
-    st.subheader("Brut Multiplier")
-    brut_multiplier = st.slider("Brut Multiplier", 1.0, 3.0, 1.58, 0.01)
-
-    st.divider()
-    st.subheader("Shrinkage %")
-    shrinkage_pct = st.slider("Shrinkage %", 0.0, 100.0, 0.0, 0.5) / 100.0
 
     cola_cfg = {
         "cola_pct": cola_pct,
