@@ -47,6 +47,16 @@ def df_to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Sheet1") -> bytes:
     return output.getvalue()
 
 
+def format_number_cols(df: pd.DataFrame, cols: list, decimals: int = 2) -> pd.DataFrame:
+    out = df.copy()
+    for c in cols:
+        if c in out.columns:
+            out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0.0).map(
+                lambda x: f"{x:,.{decimals}f}"
+            )
+    return out
+
+
 def compute_budget(prices_df, plan_df, cola_cfg, fx_rates_df):
     df = plan_df.copy()
 
@@ -1163,25 +1173,38 @@ with tab4:
         c for c in ordered_display_cols if c in result_display.columns]
     result_display = result_display[ordered_display_cols]
 
+    # Keep a numeric copy for export
+    result_export = result_display.copy()
+
+    # Format amounts with thousand separators for display
+    money_cols = [
+        "Agent Cost", "Overhead Cost", "Total Cost", "Unit_Price",
+        "Adj. Unit Price", "FX_Rate", "Eff_Production_Hours",
+        "Eff_FTE", "Eff_FTE_Hours", "Billable_Hours", "Revenue", "GM"
+    ]
+    result_display = format_number_cols(result_display, money_cols, decimals=2)
+    if "FX_Rate" in result_display.columns:
+        result_display = format_number_cols(result_display, ["FX_Rate"], decimals=4)
+
     st.dataframe(
         result_display,
         use_container_width=True,
         column_config={
-            "Production_Hours": st.column_config.NumberColumn("Production_Hours", format="%.2f"),
-            "FTE": st.column_config.NumberColumn("FTE", format="%.2f"),
-            "Agent Cost": st.column_config.NumberColumn("Agent Cost", format="%.2f"),
-            "Overhead Cost": st.column_config.NumberColumn("Overhead_Cost", format="%.2f"),
-            "Total Cost": st.column_config.NumberColumn("Total Cost", format="%.2f"),
-            "Unit_Price": st.column_config.NumberColumn("Unit_Price", format="%.2f"),
+            "Production_Hours": st.column_config.TextColumn("Production_Hours"),
+            "FTE": st.column_config.TextColumn("FTE"),
+            "Agent Cost": st.column_config.TextColumn("Agent Cost"),
+            "Overhead Cost": st.column_config.TextColumn("Overhead_Cost"),
+            "Total Cost": st.column_config.TextColumn("Total Cost"),
+            "Unit_Price": st.column_config.TextColumn("Unit_Price"),
             "COLA_%": st.column_config.TextColumn("COLA_%"),
-            "Adj. Unit Price": st.column_config.NumberColumn("Adj. Unit Price", format="%.2f"),
-            "FX_Rate": st.column_config.NumberColumn("FX_Rate", format="%.4f"),
-            "Eff_Production_Hours": st.column_config.NumberColumn("Eff_Production_Hours", format="%.2f"),
-            "Eff_FTE": st.column_config.NumberColumn("Eff_FTE", format="%.2f"),
-            "Eff_FTE_Hours": st.column_config.NumberColumn("Eff_FTE_Hours", format="%.2f"),
-            "Billable_Hours": st.column_config.NumberColumn("Billable_Hours", format="%.2f"),
-            "Revenue": st.column_config.NumberColumn("Revenue", format="%.2f"),
-            "GM": st.column_config.NumberColumn("GM", format="%.2f"),
+            "Adj. Unit Price": st.column_config.TextColumn("Adj. Unit Price"),
+            "FX_Rate": st.column_config.TextColumn("FX_Rate"),
+            "Eff_Production_Hours": st.column_config.TextColumn("Eff_Production_Hours"),
+            "Eff_FTE": st.column_config.TextColumn("Eff_FTE"),
+            "Eff_FTE_Hours": st.column_config.TextColumn("Eff_FTE_Hours"),
+            "Billable_Hours": st.column_config.TextColumn("Billable_Hours"),
+            "Revenue": st.column_config.TextColumn("Revenue"),
+            "GM": st.column_config.TextColumn("GM"),
             "GM_%": st.column_config.TextColumn("GM_%"),
         }
     )
@@ -1192,16 +1215,7 @@ with tab4:
         st.info("No rows for the selected operation.")
         pivot_acc = pd.DataFrame(
             columns=["Account", "Revenue", "Adj_Cost", "GM", "GM_%"])
-        st.dataframe(
-            pivot_acc,
-            use_container_width=True,
-            column_config={
-                "Revenue": st.column_config.NumberColumn("Revenue", format="%.2f"),
-                "Adj_Cost": st.column_config.NumberColumn("Adj Cost", format="%.2f"),
-                "GM": st.column_config.NumberColumn("GM", format="%.2f"),
-                "GM_%": st.column_config.NumberColumn("GM %", format="0.00%"),
-            }
-        )
+        st.dataframe(pivot_acc, use_container_width=True)
     else:
         pivot_acc = result_df.pivot_table(
             index="Account",
@@ -1213,22 +1227,25 @@ with tab4:
                 pivot_acc["Revenue"] == 0, 0, pivot_acc["GM"] / pivot_acc["Revenue"])
         else:
             pivot_acc["GM_%"] = 0.0
-        st.dataframe(pivot_acc, use_container_width=True)
+        pivot_acc_display = pivot_acc.copy()
+        pivot_acc_display["GM_%"] = (pivot_acc_display["GM_%"] * 100).round(2).astype(str) + "%"
+        pivot_acc_display = format_number_cols(pivot_acc_display, ["Revenue", "Adj_Cost", "GM"], decimals=2)
+        st.dataframe(
+            pivot_acc_display,
+            use_container_width=True,
+            column_config={
+                "Revenue": st.column_config.TextColumn("Revenue"),
+                "Adj_Cost": st.column_config.TextColumn("Adj Cost"),
+                "GM": st.column_config.TextColumn("GM"),
+                "GM_%": st.column_config.TextColumn("GM %"),
+            }
+        )
 
     st.write("Summary by Account & Language")
     if result_df.empty:
         pivot_acc_lang = pd.DataFrame(
             columns=["Account", "Language", "Revenue", "Adj_Cost", "GM", "GM_%"])
-        st.dataframe(
-            pivot_acc_lang,
-            use_container_width=True,
-            column_config={
-                "Revenue": st.column_config.NumberColumn("Revenue", format="%.2f"),
-                "Adj_Cost": st.column_config.NumberColumn("Adj Cost", format="%.2f"),
-                "GM": st.column_config.NumberColumn("GM", format="%.2f"),
-                "GM_%": st.column_config.NumberColumn("GM %", format="0.00%"),
-            }
-        )
+        st.dataframe(pivot_acc_lang, use_container_width=True)
     else:
         pivot_acc_lang = result_df.pivot_table(
             index=["Account", "Language"],
@@ -1240,10 +1257,22 @@ with tab4:
                 pivot_acc_lang["Revenue"] == 0, 0, pivot_acc_lang["GM"] / pivot_acc_lang["Revenue"])
         else:
             pivot_acc_lang["GM_%"] = 0.0
-        st.dataframe(pivot_acc_lang, use_container_width=True)
+        pivot_acc_lang_display = pivot_acc_lang.copy()
+        pivot_acc_lang_display["GM_%"] = (pivot_acc_lang_display["GM_%"] * 100).round(2).astype(str) + "%"
+        pivot_acc_lang_display = format_number_cols(pivot_acc_lang_display, ["Revenue", "Adj_Cost", "GM"], decimals=2)
+        st.dataframe(
+            pivot_acc_lang_display,
+            use_container_width=True,
+            column_config={
+                "Revenue": st.column_config.TextColumn("Revenue"),
+                "Adj_Cost": st.column_config.TextColumn("Adj Cost"),
+                "GM": st.column_config.TextColumn("GM"),
+                "GM_%": st.column_config.TextColumn("GM %"),
+            }
+        )
 
     # Downloads (XLSX)
-    xlsx = df_to_excel_bytes(result_display, sheet_name="Detailed Results")
+    xlsx = df_to_excel_bytes(result_export, sheet_name="Detailed Results")
     st.download_button("⬇️ Download detailed XLSX", data=xlsx,
                        file_name="budget_results_detailed.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
