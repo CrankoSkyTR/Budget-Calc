@@ -1167,7 +1167,7 @@ with tab4:
         "Agent Cost", "Overhead Cost", "Total Cost",
         "Unit_Price", "COLA_%", "Adj. Unit Price", "Billing_Mode",
         "FX_Rate", "Eff_Production_Hours", "Eff_FTE", "Eff_FTE_Hours",
-        "Billable_Hours", "Revenue", "GM", "GM_%"
+        "Billable_Hours", "Revenue", "GM", "GM_%", "Notes"
     ]
     ordered_display_cols = [
         c for c in ordered_display_cols if c in result_display.columns]
