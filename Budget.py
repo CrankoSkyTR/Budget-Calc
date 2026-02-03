@@ -17,7 +17,7 @@ ACCOUNTS = [
     "TP Vision",
 ]
 DEFAULT_LANGUAGES = ["DE", "FR", "IT", "TR", "EN",
-                     "ES", "NL", "CH/DE", "AR", "DE/EN", "TR/EN"]
+                     "ES", "NL", "AR", "CH/DE", "DE/EN", "TR/EN"]
 ROLES = ["Operation Manager", "Teamleader", "Trainer & Quality",
          "RTA", "Planner", "WFM", "Operation Support"]
 
