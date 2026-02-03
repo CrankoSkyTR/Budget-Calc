@@ -367,17 +367,23 @@ tab_setup, tab_plan, tab_results = st.tabs(
 
 with tab_setup:
     st.subheader("Required Inputs")
-    st.caption("You can import a previously downloaded project file to reuse all inputs.")
+    st.caption(
+        "You can import a previously downloaded project file to reuse all inputs.")
 
     st.markdown("**Project File (load previous inputs)**")
-    project_file = st.file_uploader("Load project XLSX", type=["xlsx"], key="project_loader")
+    project_file = st.file_uploader("Load project XLSX", type=[
+                                    "xlsx"], key="project_loader")
     if project_file is not None:
         try:
             xls = pd.ExcelFile(project_file)
-            up_cols = ["Account", "Language", "UnitPrice", "Currency", "Billing_Mode"]
-            cd_cols = ["Account", "Language", "Salary", "OSS", "Food", "Goalpex_%", "Additional_Cost"]
-            oh_cols = ["Account", "Role", "FTE", "Salary", "OSS", "Food", "Goalpex_%", "Additional_Cost"]
-            plan_cols = ["Month", "Account", "Language", "Production_Hours", "FTE", "Notes"]
+            up_cols = ["Account", "Language",
+                       "UnitPrice", "Currency", "Billing_Mode"]
+            cd_cols = ["Account", "Language", "Salary",
+                       "OSS", "Food", "Goalpex_%", "Additional_Cost"]
+            oh_cols = ["Account", "Role", "FTE", "Salary",
+                       "OSS", "Food", "Goalpex_%", "Additional_Cost"]
+            plan_cols = ["Month", "Account", "Language",
+                         "Production_Hours", "FTE", "Notes"]
             fx_cols = ["Month", "Currency", "FX_Rate"]
 
             loaded_up = read_optional_sheet(xls, "Input_UnitPrices", up_cols)
@@ -691,13 +697,14 @@ with tab_results:
         total_gm_pct = (
             total_gm / total_revenue) if total_revenue != 0 else (-1.0 if total_gm < 0 else 0.0)
 
-        c1, c2, c3, c4, c5, c6 = st.columns(6)
-        c1.metric("Revenue", f"{total_revenue:,.2f}")
-        c2.metric("Agent Cost", f"{total_agent:,.2f}")
-        c3.metric("Overhead Cost", f"{total_overhead:,.2f}")
-        c4.metric("Total Cost", f"{total_cost:,.2f}")
-        c5.metric("GM", f"{total_gm:,.2f}")
-        c6.metric("GM %", f"{total_gm_pct*100:,.2f}%")
+        r1c1, r1c2, r1c3 = st.columns(3)
+        r1c1.metric("Revenue", f"{total_revenue:,.2f}")
+        r1c2.metric("Agent Cost", f"{total_agent:,.2f}")
+        r1c3.metric("Overhead Cost", f"{total_overhead:,.2f}")
+        r2c1, r2c2, r2c3 = st.columns(3)
+        r2c1.metric("Total Cost", f"{total_cost:,.2f}")
+        r2c2.metric("GM", f"{total_gm:,.2f}")
+        r2c3.metric("GM %", f"{total_gm_pct*100:,.2f}%")
 
         if enable_whatif and whatif_result is not None and not whatif_result.empty:
             wf_revenue = whatif_result["Revenue"].sum()
