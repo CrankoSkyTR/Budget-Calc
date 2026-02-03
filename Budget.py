@@ -481,8 +481,7 @@ with tab1:
     st.subheader("Unit Price per Account & Language")
 
     st.info(
-        "Define your Unit Price per language for each account (e.g., €/hour, €/FTE). "
-        "You control what 'Volume' means in the plan tab."
+        "Define your Unit Price per language for each account (e.g., €/hour, €/FTE)."
     )
 
     prices_view = st.session_state.prices_df
@@ -878,12 +877,10 @@ with tab2:
 # -----------------------------
 with tab3:
     st.subheader("Monthly Plan (Volume + Agent Cost)")
-    st.caption(
-        "Volume = hours — you decide. Agent Cost = costs for that month row.")
 
     st.subheader("FTE Import")
     st.caption(
-        "Download the template, fill FTE per month/account/language, then upload to update the plan.")
+        "Download the template, fill FTE and Production Hours, then upload to update the plan.")
 
     # Template uses current months and accounts
     # Build template from months + selected operation + languages from Base Cost
@@ -1184,7 +1181,8 @@ with tab4:
     ]
     result_display = format_number_cols(result_display, money_cols, decimals=2)
     if "FX_Rate" in result_display.columns:
-        result_display = format_number_cols(result_display, ["FX_Rate"], decimals=4)
+        result_display = format_number_cols(
+            result_display, ["FX_Rate"], decimals=4)
 
     st.dataframe(
         result_display,
@@ -1228,8 +1226,10 @@ with tab4:
         else:
             pivot_acc["GM_%"] = 0.0
         pivot_acc_display = pivot_acc.copy()
-        pivot_acc_display["GM_%"] = (pivot_acc_display["GM_%"] * 100).round(2).astype(str) + "%"
-        pivot_acc_display = format_number_cols(pivot_acc_display, ["Revenue", "Adj_Cost", "GM"], decimals=2)
+        pivot_acc_display["GM_%"] = (
+            pivot_acc_display["GM_%"] * 100).round(2).astype(str) + "%"
+        pivot_acc_display = format_number_cols(
+            pivot_acc_display, ["Revenue", "Adj_Cost", "GM"], decimals=2)
         st.dataframe(
             pivot_acc_display,
             use_container_width=True,
@@ -1258,8 +1258,10 @@ with tab4:
         else:
             pivot_acc_lang["GM_%"] = 0.0
         pivot_acc_lang_display = pivot_acc_lang.copy()
-        pivot_acc_lang_display["GM_%"] = (pivot_acc_lang_display["GM_%"] * 100).round(2).astype(str) + "%"
-        pivot_acc_lang_display = format_number_cols(pivot_acc_lang_display, ["Revenue", "Adj_Cost", "GM"], decimals=2)
+        pivot_acc_lang_display["GM_%"] = (
+            pivot_acc_lang_display["GM_%"] * 100).round(2).astype(str) + "%"
+        pivot_acc_lang_display = format_number_cols(
+            pivot_acc_lang_display, ["Revenue", "Adj_Cost", "GM"], decimals=2)
         st.dataframe(
             pivot_acc_lang_display,
             use_container_width=True,
