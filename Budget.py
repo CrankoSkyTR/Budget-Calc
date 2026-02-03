@@ -55,6 +55,16 @@ def gm_pct_from_series(gm: pd.Series, revenue: pd.Series) -> pd.Series:
     return pd.Series(out, index=gm.index)
 
 
+def read_optional_sheet(xls: pd.ExcelFile, sheet_name: str, columns: list) -> pd.DataFrame:
+    if sheet_name not in xls.sheet_names:
+        return pd.DataFrame(columns=columns)
+    df = pd.read_excel(xls, sheet_name=sheet_name)
+    for c in columns:
+        if c not in df.columns:
+            df[c] = np.nan
+    return df[columns].copy()
+
+
 def normalize_plan(plan_df: pd.DataFrame, months: list, combos_df: pd.DataFrame) -> pd.DataFrame:
     base = combos_df[["Account", "Language"]].drop_duplicates().copy()
     if base.empty:
@@ -124,6 +134,31 @@ def aggregate_overhead_monthly(overhead_df: pd.DataFrame, cfg: dict) -> pd.DataF
     computed = oh["Net_Per_FTE"] * cfg["brut_multiplier"] * oh["FTE"]
     oh["Monthly_Overhead_TRY"] = manual.combine_first(computed).fillna(0.0)
     return oh.groupby("Account", as_index=False)["Monthly_Overhead_TRY"].sum()
+
+
+def clean_overhead_rows(df: pd.DataFrame, default_account: str, cfg: dict) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["Account", "Role", "FTE", "Salary", "OSS", "Food", "Goalpex_%", "Additional_Cost"])
+    out = df.copy()
+    for c, default in [
+        ("Account", default_account),
+        ("Role", ROLES[0]),
+        ("FTE", 1.0),
+        ("Salary", 0.0),
+        ("OSS", cfg["default_oss"]),
+        ("Food", cfg["default_food"]),
+        ("Goalpex_%", cfg["default_goalpex"]),
+        ("Additional_Cost", 0.0),
+    ]:
+        if c not in out.columns:
+            out[c] = default
+    out["Account"] = out["Account"].fillna(default_account).astype(str)
+    out["Role"] = out["Role"].fillna(ROLES[0]).astype(str)
+    for c, default in [("FTE", 1.0), ("Salary", 0.0), ("OSS", cfg["default_oss"]), ("Food", cfg["default_food"]), ("Goalpex_%", cfg["default_goalpex"]), ("Additional_Cost", 0.0)]:
+        out[c] = pd.to_numeric(out[c], errors="coerce").fillna(default)
+    out = out[out["Account"].isin(ACCOUNTS)]
+    out = out[out["Role"].isin(ROLES)]
+    return out[["Account", "Role", "FTE", "Salary", "OSS", "Food", "Goalpex_%", "Additional_Cost"]].copy()
 
 
 def compute_budget(plan_df, prices_df, cost_df, fx_df, overhead_df, cfg):
@@ -332,6 +367,38 @@ tab_setup, tab_plan, tab_results = st.tabs(
 
 with tab_setup:
     st.subheader("Required Inputs")
+    st.caption("You can import a previously downloaded project file to reuse all inputs.")
+
+    st.markdown("**Project File (load previous inputs)**")
+    project_file = st.file_uploader("Load project XLSX", type=["xlsx"], key="project_loader")
+    if project_file is not None:
+        try:
+            xls = pd.ExcelFile(project_file)
+            up_cols = ["Account", "Language", "UnitPrice", "Currency", "Billing_Mode"]
+            cd_cols = ["Account", "Language", "Salary", "OSS", "Food", "Goalpex_%", "Additional_Cost"]
+            oh_cols = ["Account", "Role", "FTE", "Salary", "OSS", "Food", "Goalpex_%", "Additional_Cost"]
+            plan_cols = ["Month", "Account", "Language", "Production_Hours", "FTE", "Notes"]
+            fx_cols = ["Month", "Currency", "FX_Rate"]
+
+            loaded_up = read_optional_sheet(xls, "Input_UnitPrices", up_cols)
+            loaded_cd = read_optional_sheet(xls, "Input_CostDefaults", cd_cols)
+            loaded_oh = read_optional_sheet(xls, "Input_Overhead", oh_cols)
+            loaded_plan = read_optional_sheet(xls, "Input_Plan", plan_cols)
+            loaded_fx = read_optional_sheet(xls, "Input_FX", fx_cols)
+
+            if not loaded_up.empty:
+                st.session_state.unit_prices_df = loaded_up
+            if not loaded_cd.empty:
+                st.session_state.cost_defaults_df = loaded_cd
+            if not loaded_oh.empty:
+                st.session_state.overhead_df = loaded_oh
+            if not loaded_plan.empty:
+                st.session_state.plan_df = loaded_plan
+            if not loaded_fx.empty:
+                st.session_state.fx_rates_df = loaded_fx
+            st.success("Project inputs loaded.")
+        except Exception as e:
+            st.error(f"Could not load project file: {e}")
 
     st.markdown("**Unit Prices (per Operation + Language)**")
     up_view = st.session_state.unit_prices_df.copy()
@@ -390,13 +457,18 @@ with tab_setup:
             str).str.strip()
 
     st.markdown("**Monthly Overhead (optional, by Operation + Role)**")
-    oh_view = st.session_state.overhead_df.copy()
+    oh_view = clean_overhead_rows(
+        st.session_state.overhead_df.copy(),
+        default_account=selected_accounts[0],
+        cfg=cfg,
+    )
     oh_view = oh_view[oh_view["Account"].isin(selected_accounts)]
     with st.form("overhead_form"):
         oh_edit = st.data_editor(
             oh_view,
             num_rows="dynamic",
             use_container_width=True,
+            hide_index=True,
             key="overhead_editor",
             column_config={
                 "Account": st.column_config.SelectboxColumn("Account", options=ACCOUNTS),
@@ -411,6 +483,11 @@ with tab_setup:
         )
         save_oh = st.form_submit_button("Save Overhead")
     if save_oh:
+        oh_edit = clean_overhead_rows(
+            oh_edit,
+            default_account=selected_accounts[0],
+            cfg=cfg,
+        )
         full_oh = st.session_state.overhead_df.copy()
         full_oh = full_oh[~full_oh["Account"].isin(selected_accounts)]
         st.session_state.overhead_df = pd.concat(
@@ -752,6 +829,11 @@ with tab_results:
         st.divider()
         export_bytes = df_to_excel_bytes(
             {
+                "Input_UnitPrices": st.session_state.unit_prices_df,
+                "Input_CostDefaults": st.session_state.cost_defaults_df,
+                "Input_Overhead": st.session_state.overhead_df,
+                "Input_Plan": st.session_state.plan_df,
+                "Input_FX": st.session_state.fx_rates_df if "fx_rates_df" in st.session_state else pd.DataFrame(columns=["Month", "Currency", "FX_Rate"]),
                 "Detailed": result,
                 "Summary_Account": s1,
                 "Summary_Acc_Lang": s2,
