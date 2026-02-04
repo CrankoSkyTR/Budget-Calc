@@ -106,6 +106,14 @@ def normalize_plan(plan_df: pd.DataFrame, months: list, combos_df: pd.DataFrame)
     return merged[keep_cols]
 
 
+def workdays_in_month(month_ym: str) -> int:
+    start = pd.to_datetime(month_ym + "-01", errors="coerce")
+    if pd.isna(start):
+        return 0
+    end = start + pd.offsets.MonthEnd(0)
+    return len(pd.date_range(start=start, end=end, freq="B"))
+
+
 def aggregate_overhead_monthly(overhead_df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     if overhead_df is None or overhead_df.empty:
         return pd.DataFrame(columns=["Account", "Monthly_Overhead_TRY"])
@@ -119,6 +127,8 @@ def aggregate_overhead_monthly(overhead_df: pd.DataFrame, cfg: dict) -> pd.DataF
         ("Food", cfg["default_food"]),
         ("Goalpex_%", cfg["default_goalpex"]),
         ("Additional_Cost", 0.0),
+        ("Transport_Allowance_Net", 0.0),
+        ("Sales_Bonus_Net", 0.0),
     ]:
         if col not in oh.columns:
             oh[col] = default
@@ -130,7 +140,7 @@ def aggregate_overhead_monthly(overhead_df: pd.DataFrame, cfg: dict) -> pd.DataF
         manual = pd.Series(np.nan, index=oh.index, dtype="float64")
     oh["Goalpex"] = oh["Salary"] * oh["Goalpex_%"]
     oh["Net_Per_FTE"] = oh["Salary"] + oh["Goalpex"] + \
-        oh["OSS"] + oh["Food"] + oh["Additional_Cost"]
+        oh["OSS"] + oh["Food"] + oh["Additional_Cost"] + oh["Transport_Allowance_Net"] + oh["Sales_Bonus_Net"]
     computed = oh["Net_Per_FTE"] * cfg["brut_multiplier"] * oh["FTE"]
     oh["Monthly_Overhead_TRY"] = manual.combine_first(computed).fillna(0.0)
     return oh.groupby("Account", as_index=False)["Monthly_Overhead_TRY"].sum()
@@ -138,7 +148,7 @@ def aggregate_overhead_monthly(overhead_df: pd.DataFrame, cfg: dict) -> pd.DataF
 
 def clean_overhead_rows(df: pd.DataFrame, default_account: str, cfg: dict) -> pd.DataFrame:
     if df is None or df.empty:
-        return pd.DataFrame(columns=["Account", "Role", "FTE", "Salary", "OSS", "Food", "Goalpex_%", "Additional_Cost"])
+        return pd.DataFrame(columns=["Account", "Role", "FTE", "Salary", "OSS", "Food", "Goalpex_%", "Additional_Cost", "Transport_Allowance_Net", "Sales_Bonus_Net"])
     out = df.copy()
     for c, default in [
         ("Account", default_account),
@@ -149,16 +159,18 @@ def clean_overhead_rows(df: pd.DataFrame, default_account: str, cfg: dict) -> pd
         ("Food", cfg["default_food"]),
         ("Goalpex_%", cfg["default_goalpex"]),
         ("Additional_Cost", 0.0),
+        ("Transport_Allowance_Net", 0.0),
+        ("Sales_Bonus_Net", 0.0),
     ]:
         if c not in out.columns:
             out[c] = default
     out["Account"] = out["Account"].fillna(default_account).astype(str)
     out["Role"] = out["Role"].fillna(ROLES[0]).astype(str)
-    for c, default in [("FTE", 1.0), ("Salary", 0.0), ("OSS", cfg["default_oss"]), ("Food", cfg["default_food"]), ("Goalpex_%", cfg["default_goalpex"]), ("Additional_Cost", 0.0)]:
+    for c, default in [("FTE", 1.0), ("Salary", 0.0), ("OSS", cfg["default_oss"]), ("Food", cfg["default_food"]), ("Goalpex_%", cfg["default_goalpex"]), ("Additional_Cost", 0.0), ("Transport_Allowance_Net", 0.0), ("Sales_Bonus_Net", 0.0)]:
         out[c] = pd.to_numeric(out[c], errors="coerce").fillna(default)
     out = out[out["Account"].isin(ACCOUNTS)]
     out = out[out["Role"].isin(ROLES)]
-    return out[["Account", "Role", "FTE", "Salary", "OSS", "Food", "Goalpex_%", "Additional_Cost"]].copy()
+    return out[["Account", "Role", "FTE", "Salary", "OSS", "Food", "Goalpex_%", "Additional_Cost", "Transport_Allowance_Net", "Sales_Bonus_Net"]].copy()
 
 
 def compute_budget(plan_df, prices_df, cost_df, fx_df, overhead_df, cfg):
@@ -197,7 +209,7 @@ def compute_budget(plan_df, prices_df, cost_df, fx_df, overhead_df, cfg):
 
     # Cost defaults by (Account, Language), fallback to (All, Language)
     c = cost_df.copy()
-    for col in ["Salary", "OSS", "Food", "Goalpex_%", "Additional_Cost"]:
+    for col in ["Salary", "OSS", "Food", "Goalpex_%", "Additional_Cost", "Transport_Allowance_Net", "Sales_Bonus_Net"]:
         c[col] = pd.to_numeric(c[col], errors="coerce")
 
     spec = c[c["Account"] != "All"].copy()
@@ -226,6 +238,8 @@ def compute_budget(plan_df, prices_df, cost_df, fx_df, overhead_df, cfg):
     df["Food"] = pick("Food", cfg["default_food"])
     df["Goalpex_%"] = pick("Goalpex_%", cfg["default_goalpex"])
     df["Additional_Cost"] = pick("Additional_Cost", 0.0)
+    df["Transport_Allowance_Net"] = pick("Transport_Allowance_Net", 0.0)
+    df["Sales_Bonus_Net"] = pick("Sales_Bonus_Net", 0.0)
 
     df["FTE"] = pd.to_numeric(df["FTE"], errors="coerce").fillna(0.0)
     df["Production_Hours"] = pd.to_numeric(
@@ -234,7 +248,7 @@ def compute_budget(plan_df, prices_df, cost_df, fx_df, overhead_df, cfg):
     # Agent cost (TRY)
     df["Goalpex"] = df["Salary"] * df["Goalpex_%"]
     df["Net_Per_FTE"] = df["Salary"] + df["Goalpex"] + \
-        df["OSS"] + df["Food"] + df["Additional_Cost"]
+        df["OSS"] + df["Food"] + df["Additional_Cost"] + df["Transport_Allowance_Net"] + df["Sales_Bonus_Net"]
     df["Agent_Cost"] = df["Net_Per_FTE"] * cfg["brut_multiplier"] * df["FTE"]
 
     # Overhead cost by account
@@ -294,7 +308,7 @@ if "unit_prices_df" not in st.session_state:
 
 if "cost_defaults_df" not in st.session_state:
     st.session_state.cost_defaults_df = pd.DataFrame(
-        [{"Account": "All", "Language": l, "Salary": 0.0, "OSS": 2083.0, "Food": 5850.0, "Goalpex_%": 0.10, "Additional_Cost": 0.0}
+        [{"Account": "All", "Language": l, "Salary": 0.0, "OSS": 2083.0, "Food": 5850.0, "Goalpex_%": 0.10, "Additional_Cost": 0.0, "Transport_Allowance_Net": 0.0, "Sales_Bonus_Net": 0.0}
          for l in ["DE", "FR", "EN"]]
     )
 
@@ -310,6 +324,8 @@ if "overhead_df" not in st.session_state:
                 "Food": 5850.0,
                 "Goalpex_%": 0.10,
                 "Additional_Cost": 0.0,
+                "Transport_Allowance_Net": 0.0,
+                "Sales_Bonus_Net": 0.0,
             }
         ]
     )
@@ -346,6 +362,8 @@ with st.sidebar:
         "Brut Multiplier", min_value=1.0, max_value=3.0, value=1.58, step=0.01)
     shrinkage_pct = st.slider(
         "Shrinkage %", min_value=0.0, max_value=100.0, value=0.0, step=0.5) / 100.0
+    hours_per_workday = st.number_input(
+        "Hours per Workday (Capacity)", min_value=0.0, max_value=24.0, value=7.75, step=0.25, format="%.2f")
 
 
 cfg = {
@@ -356,14 +374,15 @@ cfg = {
     "default_oss": 2083.0,
     "default_food": 5850.0,
     "default_goalpex": 0.10,
+    "hours_per_workday": hours_per_workday,
 }
 
 
 # -----------------------------
 # Tabs
 # -----------------------------
-tab_setup, tab_plan, tab_results = st.tabs(
-    ["1) Setup", "2) Monthly Plan", "3) Results"])
+tab_setup, tab_plan, tab_results, tab_capacity = st.tabs(
+    ["1) Setup", "2) Monthly Plan", "3) Results", "4) Capacity"])
 
 with tab_setup:
     st.subheader("Required Inputs")
@@ -379,9 +398,9 @@ with tab_setup:
             up_cols = ["Account", "Language",
                        "UnitPrice", "Currency", "Billing_Mode"]
             cd_cols = ["Account", "Language", "Salary",
-                       "OSS", "Food", "Goalpex_%", "Additional_Cost"]
+                       "OSS", "Food", "Goalpex_%", "Additional_Cost", "Transport_Allowance_Net", "Sales_Bonus_Net"]
             oh_cols = ["Account", "Role", "FTE", "Salary",
-                       "OSS", "Food", "Goalpex_%", "Additional_Cost"]
+                       "OSS", "Food", "Goalpex_%", "Additional_Cost", "Transport_Allowance_Net", "Sales_Bonus_Net"]
             plan_cols = ["Month", "Account", "Language",
                          "Production_Hours", "FTE", "Notes"]
             fx_cols = ["Month", "Currency", "FX_Rate"]
@@ -450,6 +469,8 @@ with tab_setup:
                 "Food": st.column_config.NumberColumn("Food (TRY)", min_value=0.0, step=10.0, format="%.2f"),
                 "Goalpex_%": st.column_config.NumberColumn("Goalpex %", min_value=0.0, step=0.01, format="%.2f"),
                 "Additional_Cost": st.column_config.NumberColumn("Additional (TRY)", min_value=0.0, step=10.0, format="%.2f"),
+                "Transport_Allowance_Net": st.column_config.NumberColumn("Transportation Allowance (Net)", min_value=0.0, step=10.0, format="%.2f"),
+                "Sales_Bonus_Net": st.column_config.NumberColumn("Sales Bonus (Net)", min_value=0.0, step=10.0, format="%.2f"),
             },
         )
         save_cd = st.form_submit_button("Save Operation Costs")
@@ -485,6 +506,8 @@ with tab_setup:
                 "Food": st.column_config.NumberColumn("Food (TRY)", min_value=0.0, step=10.0, format="%.2f"),
                 "Goalpex_%": st.column_config.NumberColumn("Goalpex %", min_value=0.0, step=0.01, format="%.2f"),
                 "Additional_Cost": st.column_config.NumberColumn("Additional (TRY)", min_value=0.0, step=10.0, format="%.2f"),
+                "Transport_Allowance_Net": st.column_config.NumberColumn("Transportation Allowance (Net)", min_value=0.0, step=10.0, format="%.2f"),
+                "Sales_Bonus_Net": st.column_config.NumberColumn("Sales Bonus (Net)", min_value=0.0, step=10.0, format="%.2f"),
             },
         )
         save_oh = st.form_submit_button("Save Overhead")
@@ -675,7 +698,7 @@ with tab_results:
                 wf_overhead["Monthly_Overhead_TRY"] = pd.to_numeric(
                     wf_overhead["Monthly_Overhead_TRY"], errors="coerce"
                 ).fillna(0.0) * wf_overhead_mult
-            for c in ["Salary", "OSS", "Food", "Additional_Cost"]:
+            for c in ["Salary", "OSS", "Food", "Additional_Cost", "Transport_Allowance_Net", "Sales_Bonus_Net"]:
                 if c in wf_overhead.columns:
                     wf_overhead[c] = pd.to_numeric(
                         wf_overhead[c], errors="coerce").fillna(0.0) * wf_overhead_mult
@@ -834,6 +857,91 @@ with tab_results:
         st.dataframe(s2_show, use_container_width=True)
 
         st.divider()
+        # Capacity export tables (same logic as Capacity tab)
+        cap_export_detail = pd.DataFrame()
+        cap_export_summary = pd.DataFrame()
+        cap_export = st.session_state.plan_df.copy()
+        if not cap_export.empty:
+            cap_export["Month"] = cap_export["Month"].astype(str)
+            cap_export["FTE"] = pd.to_numeric(cap_export["FTE"], errors="coerce").fillna(0.0)
+            cap_export["Production_Hours"] = pd.to_numeric(cap_export["Production_Hours"], errors="coerce").fillna(0.0)
+            cap_export["Workdays"] = cap_export["Month"].apply(workdays_in_month)
+            cap_export["Hours_Per_FTE"] = cap_export["Workdays"] * cfg["hours_per_workday"]
+            cap_export["FTE_Capacity_Hours"] = cap_export["FTE"] * cap_export["Hours_Per_FTE"]
+            cap_export["Eff_Capacity_Hours"] = cap_export["FTE_Capacity_Hours"] * (1 - cfg["shrinkage_pct"])
+            cap_export["Required_Hours"] = cap_export["Production_Hours"]
+            cap_export["Gap_Hours"] = cap_export["Eff_Capacity_Hours"] - cap_export["Required_Hours"]
+            cap_export["Buffer_Hours"] = cap_export["Gap_Hours"].clip(lower=0)
+            cap_export["Over_Demand_Hours"] = (cap_export["Required_Hours"] - cap_export["Eff_Capacity_Hours"]).clip(lower=0)
+            cap_export["Idle_Hours"] = (cap_export["Eff_Capacity_Hours"] - cap_export["Required_Hours"]).clip(lower=0)
+            cap_export["Invoiceable_Hours"] = np.minimum(cap_export["Required_Hours"], cap_export["Eff_Capacity_Hours"])
+            cap_export["Buffer_%"] = np.where(
+                cap_export["Eff_Capacity_Hours"] == 0, 0.0, cap_export["Buffer_Hours"] / cap_export["Eff_Capacity_Hours"]
+            )
+            cap_export["Status"] = np.where(
+                cap_export["Over_Demand_Hours"] > 0,
+                "Under Capacity (Cannot Invoice Full Demand)",
+                "Over Capacity / Idle",
+            )
+            cap_budget_export = compute_budget(
+                st.session_state.plan_df,
+                st.session_state.unit_prices_df,
+                st.session_state.cost_defaults_df,
+                st.session_state.fx_rates_df,
+                st.session_state.overhead_df,
+                cfg,
+            )
+            if not cap_budget_export.empty:
+                merge_cols = ["Month", "Account", "Language", "Adj. Unit Price", "FX_Rate", "Total Cost"]
+                merge_cols = [c for c in merge_cols if c in cap_budget_export.columns]
+                cap_export = cap_export.merge(
+                    cap_budget_export[merge_cols],
+                    on=["Month", "Account", "Language"],
+                    how="left",
+                )
+            cap_export["Adj. Unit Price"] = pd.to_numeric(cap_export.get("Adj. Unit Price"), errors="coerce").fillna(0.0)
+            cap_export["FX_Rate"] = pd.to_numeric(cap_export.get("FX_Rate"), errors="coerce").fillna(1.0)
+            cap_export["Total Cost"] = pd.to_numeric(cap_export.get("Total Cost"), errors="coerce").fillna(0.0)
+            cap_export["Rate_TRY_per_Hour"] = cap_export["Adj. Unit Price"] * cap_export["FX_Rate"]
+            cap_export["Potential_Revenue_TRY"] = cap_export["Required_Hours"] * cap_export["Rate_TRY_per_Hour"]
+            cap_export["Invoiceable_Revenue_TRY"] = cap_export["Invoiceable_Hours"] * cap_export["Rate_TRY_per_Hour"]
+            cap_export["Lost_Revenue_TRY"] = (cap_export["Potential_Revenue_TRY"] - cap_export["Invoiceable_Revenue_TRY"]).clip(lower=0)
+            cap_export["Cost_per_Capacity_Hour"] = np.where(
+                cap_export["Eff_Capacity_Hours"] == 0, 0.0, cap_export["Total Cost"] / cap_export["Eff_Capacity_Hours"]
+            )
+            cap_export["Idle_Cost_TRY"] = cap_export["Idle_Hours"] * cap_export["Cost_per_Capacity_Hour"]
+            cap_export["Actual_GM_TRY"] = cap_export["Invoiceable_Revenue_TRY"] - cap_export["Total Cost"]
+            cap_export["Potential_GM_TRY"] = cap_export["Potential_Revenue_TRY"] - cap_export["Total Cost"]
+            cap_export["Actual_GM_%"] = np.where(
+                cap_export["Invoiceable_Revenue_TRY"] != 0,
+                cap_export["Actual_GM_TRY"] / cap_export["Invoiceable_Revenue_TRY"],
+                np.where(cap_export["Actual_GM_TRY"] < 0, -1.0, 0.0),
+            )
+            cap_export["Potential_GM_%"] = np.where(
+                cap_export["Potential_Revenue_TRY"] != 0,
+                cap_export["Potential_GM_TRY"] / cap_export["Potential_Revenue_TRY"],
+                np.where(cap_export["Potential_GM_TRY"] < 0, -1.0, 0.0),
+            )
+            cap_export_detail = cap_export.copy()
+            cap_export_summary = cap_export.groupby(["Month", "Account"], as_index=False)[
+                [
+                    "Eff_Capacity_Hours", "Required_Hours", "Invoiceable_Hours", "Over_Demand_Hours",
+                    "Idle_Hours", "Gap_Hours", "Buffer_Hours", "Potential_Revenue_TRY",
+                    "Invoiceable_Revenue_TRY", "Lost_Revenue_TRY", "Idle_Cost_TRY", "Total Cost",
+                    "Actual_GM_TRY", "Potential_GM_TRY",
+                ]
+            ].sum()
+            cap_export_summary["Actual_GM_%"] = np.where(
+                cap_export_summary["Invoiceable_Revenue_TRY"] != 0,
+                cap_export_summary["Actual_GM_TRY"] / cap_export_summary["Invoiceable_Revenue_TRY"],
+                np.where(cap_export_summary["Actual_GM_TRY"] < 0, -1.0, 0.0),
+            )
+            cap_export_summary["Potential_GM_%"] = np.where(
+                cap_export_summary["Potential_Revenue_TRY"] != 0,
+                cap_export_summary["Potential_GM_TRY"] / cap_export_summary["Potential_Revenue_TRY"],
+                np.where(cap_export_summary["Potential_GM_TRY"] < 0, -1.0, 0.0),
+            )
+
         export_bytes = df_to_excel_bytes(
             {
                 "Input_UnitPrices": st.session_state.unit_prices_df,
@@ -845,6 +953,8 @@ with tab_results:
                 "Summary_Account": s1,
                 "Summary_Acc_Lang": s2,
                 "Trend": trend,
+                "Capacity_Detail": cap_export_detail,
+                "Capacity_Summary": cap_export_summary,
             }
         )
         st.download_button(
@@ -853,3 +963,201 @@ with tab_results:
             file_name="budget_results.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
+
+with tab_capacity:
+    st.subheader("FTE Capacity vs Operational Hours")
+    st.caption(
+        f"Capacity is calculated as `FTE × {cfg['hours_per_workday']:.2f} hours × workdays (Mon-Fri)` per month.")
+
+    cap_df = st.session_state.plan_df.copy()
+    if cap_df.empty:
+        st.info("No Monthly Plan data yet.")
+    else:
+        cap_df["Month"] = cap_df["Month"].astype(str)
+        cap_df["FTE"] = pd.to_numeric(
+            cap_df["FTE"], errors="coerce").fillna(0.0)
+        cap_df["Production_Hours"] = pd.to_numeric(
+            cap_df["Production_Hours"], errors="coerce").fillna(0.0)
+        cap_df["Workdays"] = cap_df["Month"].apply(workdays_in_month)
+        cap_df["Hours_Per_FTE"] = cap_df["Workdays"] * cfg["hours_per_workday"]
+        cap_df["FTE_Capacity_Hours"] = cap_df["FTE"] * cap_df["Hours_Per_FTE"]
+        cap_df["Eff_Capacity_Hours"] = cap_df["FTE_Capacity_Hours"] * \
+            (1 - cfg["shrinkage_pct"])
+        cap_df["Required_Hours"] = cap_df["Production_Hours"]
+        cap_df["Gap_Hours"] = cap_df["Eff_Capacity_Hours"] - \
+            cap_df["Required_Hours"]
+        cap_df["Buffer_Hours"] = cap_df["Gap_Hours"].clip(lower=0)
+        cap_df["Over_Demand_Hours"] = (
+            cap_df["Required_Hours"] - cap_df["Eff_Capacity_Hours"]).clip(lower=0)
+        cap_df["Idle_Hours"] = (
+            cap_df["Eff_Capacity_Hours"] - cap_df["Required_Hours"]).clip(lower=0)
+        cap_df["Invoiceable_Hours"] = np.minimum(
+            cap_df["Required_Hours"], cap_df["Eff_Capacity_Hours"])
+        cap_df["Buffer_%"] = np.where(
+            cap_df["Eff_Capacity_Hours"] == 0,
+            0.0,
+            cap_df["Buffer_Hours"] / cap_df["Eff_Capacity_Hours"],
+        )
+        cap_df["Status"] = np.where(
+            cap_df["Over_Demand_Hours"] > 0,
+            "Under Capacity (Cannot Invoice Full Demand)",
+            "Over Capacity / Idle",
+        )
+
+        # Financial impact view (using rate/cost context from budget result)
+        cap_budget = compute_budget(
+            st.session_state.plan_df,
+            st.session_state.unit_prices_df,
+            st.session_state.cost_defaults_df,
+            st.session_state.fx_rates_df,
+            st.session_state.overhead_df,
+            cfg,
+        )
+        if not cap_budget.empty:
+            merge_cols = ["Month", "Account", "Language",
+                          "Adj. Unit Price", "FX_Rate", "Total Cost"]
+            merge_cols = [c for c in merge_cols if c in cap_budget.columns]
+            cap_df = cap_df.merge(
+                cap_budget[merge_cols],
+                on=["Month", "Account", "Language"],
+                how="left",
+            )
+        else:
+            cap_df["Adj. Unit Price"] = 0.0
+            cap_df["FX_Rate"] = 1.0
+            cap_df["Total Cost"] = 0.0
+
+        cap_df["Adj. Unit Price"] = pd.to_numeric(
+            cap_df.get("Adj. Unit Price"), errors="coerce").fillna(0.0)
+        cap_df["FX_Rate"] = pd.to_numeric(
+            cap_df.get("FX_Rate"), errors="coerce").fillna(1.0)
+        cap_df["Total Cost"] = pd.to_numeric(
+            cap_df.get("Total Cost"), errors="coerce").fillna(0.0)
+        cap_df["Rate_TRY_per_Hour"] = cap_df["Adj. Unit Price"] * \
+            cap_df["FX_Rate"]
+        cap_df["Potential_Revenue_TRY"] = cap_df["Required_Hours"] * \
+            cap_df["Rate_TRY_per_Hour"]
+        cap_df["Invoiceable_Revenue_TRY"] = cap_df["Invoiceable_Hours"] * \
+            cap_df["Rate_TRY_per_Hour"]
+        cap_df["Lost_Revenue_TRY"] = (
+            cap_df["Potential_Revenue_TRY"] - cap_df["Invoiceable_Revenue_TRY"]).clip(lower=0)
+        cap_df["Cost_per_Capacity_Hour"] = np.where(
+            cap_df["Eff_Capacity_Hours"] == 0, 0.0, cap_df["Total Cost"] /
+            cap_df["Eff_Capacity_Hours"]
+        )
+        cap_df["Idle_Cost_TRY"] = cap_df["Idle_Hours"] * \
+            cap_df["Cost_per_Capacity_Hour"]
+        cap_df["Actual_GM_TRY"] = cap_df["Invoiceable_Revenue_TRY"] - cap_df["Total Cost"]
+        cap_df["Potential_GM_TRY"] = cap_df["Potential_Revenue_TRY"] - cap_df["Total Cost"]
+        cap_df["Actual_GM_%"] = np.where(
+            cap_df["Invoiceable_Revenue_TRY"] != 0,
+            cap_df["Actual_GM_TRY"] / cap_df["Invoiceable_Revenue_TRY"],
+            np.where(cap_df["Actual_GM_TRY"] < 0, -1.0, 0.0),
+        )
+        cap_df["Potential_GM_%"] = np.where(
+            cap_df["Potential_Revenue_TRY"] != 0,
+            cap_df["Potential_GM_TRY"] / cap_df["Potential_Revenue_TRY"],
+            np.where(cap_df["Potential_GM_TRY"] < 0, -1.0, 0.0),
+        )
+
+        k1, k2, k3, k4, k5 = st.columns(5)
+        k1.metric("Total Over-Demand Hours",
+                  f"{cap_df['Over_Demand_Hours'].sum():,.2f}")
+        k2.metric("Total Idle Hours", f"{cap_df['Idle_Hours'].sum():,.2f}")
+        k3.metric("Lost Invoice Revenue (TRY)",
+                  f"{cap_df['Lost_Revenue_TRY'].sum():,.2f}")
+        total_actual_rev = cap_df["Invoiceable_Revenue_TRY"].sum()
+        total_actual_gm = cap_df["Actual_GM_TRY"].sum()
+        total_actual_gm_pct = (
+            total_actual_gm / total_actual_rev
+        ) if total_actual_rev != 0 else (-1.0 if total_actual_gm < 0 else 0.0)
+        k4.metric("Actual GM %", f"{total_actual_gm_pct*100:,.2f}%")
+        total_potential_rev = cap_df["Potential_Revenue_TRY"].sum()
+        total_potential_gm = cap_df["Potential_GM_TRY"].sum()
+        total_potential_gm_pct = (
+            total_potential_gm / total_potential_rev
+        ) if total_potential_rev != 0 else (-1.0 if total_potential_gm < 0 else 0.0)
+        k5.metric("Potential GM % (No Lost Hours)", f"{total_potential_gm_pct*100:,.2f}%")
+
+        st.markdown("**Detailed Capacity**")
+        cap_show = cap_df.copy()
+        for c in [
+            "Hours_Per_FTE", "FTE_Capacity_Hours", "Eff_Capacity_Hours", "Required_Hours",
+            "Gap_Hours", "Buffer_Hours", "Over_Demand_Hours", "Idle_Hours",
+            "Invoiceable_Hours", "Potential_Revenue_TRY", "Invoiceable_Revenue_TRY",
+            "Lost_Revenue_TRY", "Idle_Cost_TRY", "Actual_GM_TRY", "Potential_GM_TRY"
+        ]:
+            cap_show[c] = money_fmt(cap_show[c], decimals=2)
+        cap_show["Buffer_%"] = (pd.to_numeric(cap_df["Buffer_%"], errors="coerce").fillna(
+            0.0) * 100).round(2).astype(str) + "%"
+        cap_show["Actual_GM_%"] = (pd.to_numeric(cap_df["Actual_GM_%"], errors="coerce").fillna(
+            0.0) * 100).round(2).astype(str) + "%"
+        cap_show["Potential_GM_%"] = (pd.to_numeric(cap_df["Potential_GM_%"], errors="coerce").fillna(
+            0.0) * 100).round(2).astype(str) + "%"
+        detail_cols = [
+            "Month", "Account", "Language", "FTE", "Workdays", "Hours_Per_FTE",
+            "Eff_Capacity_Hours", "Required_Hours", "Invoiceable_Hours",
+            "Over_Demand_Hours", "Idle_Hours", "Gap_Hours", "Buffer_Hours", "Buffer_%",
+            "Potential_Revenue_TRY", "Invoiceable_Revenue_TRY", "Lost_Revenue_TRY", "Idle_Cost_TRY",
+            "Actual_GM_%", "Potential_GM_%", "Status"
+        ]
+        st.dataframe(cap_show[detail_cols], use_container_width=True)
+
+        st.markdown("**Summary by Month + Operation**")
+        cap_sum = cap_df.groupby(["Month", "Account"], as_index=False)[
+            [
+                "Eff_Capacity_Hours", "Required_Hours", "Invoiceable_Hours",
+                "Over_Demand_Hours", "Idle_Hours", "Gap_Hours", "Buffer_Hours",
+                "Potential_Revenue_TRY", "Invoiceable_Revenue_TRY", "Lost_Revenue_TRY", "Idle_Cost_TRY", "Total Cost"
+            ]
+        ].sum()
+        cap_sum["Actual_GM_TRY"] = cap_sum["Invoiceable_Revenue_TRY"] - cap_sum["Total Cost"]
+        cap_sum["Potential_GM_TRY"] = cap_sum["Potential_Revenue_TRY"] - cap_sum["Total Cost"]
+        cap_sum["Actual_GM_%"] = np.where(
+            cap_sum["Invoiceable_Revenue_TRY"] != 0,
+            cap_sum["Actual_GM_TRY"] / cap_sum["Invoiceable_Revenue_TRY"],
+            np.where(cap_sum["Actual_GM_TRY"] < 0, -1.0, 0.0),
+        )
+        cap_sum["Potential_GM_%"] = np.where(
+            cap_sum["Potential_Revenue_TRY"] != 0,
+            cap_sum["Potential_GM_TRY"] / cap_sum["Potential_Revenue_TRY"],
+            np.where(cap_sum["Potential_GM_TRY"] < 0, -1.0, 0.0),
+        )
+        cap_sum["Buffer_%"] = np.where(
+            cap_sum["Eff_Capacity_Hours"] == 0, 0.0, cap_sum["Buffer_Hours"] /
+            cap_sum["Eff_Capacity_Hours"]
+        )
+        cap_sum["Status"] = np.where(
+            cap_sum["Over_Demand_Hours"] > 0,
+            "Under Capacity (Cannot Invoice Full Demand)",
+            "Over Capacity / Idle",
+        )
+        cap_sum_show = cap_sum.copy()
+        for c in [
+            "Eff_Capacity_Hours", "Required_Hours", "Invoiceable_Hours", "Over_Demand_Hours",
+            "Idle_Hours", "Gap_Hours", "Buffer_Hours", "Potential_Revenue_TRY",
+            "Invoiceable_Revenue_TRY", "Lost_Revenue_TRY", "Idle_Cost_TRY", "Total Cost",
+            "Actual_GM_TRY", "Potential_GM_TRY"
+        ]:
+            cap_sum_show[c] = money_fmt(cap_sum_show[c], decimals=2)
+        cap_sum_show["Buffer_%"] = (
+            cap_sum["Buffer_%"] * 100).round(2).astype(str) + "%"
+        cap_sum_show["Actual_GM_%"] = (
+            cap_sum["Actual_GM_%"] * 100).round(2).astype(str) + "%"
+        cap_sum_show["Potential_GM_%"] = (
+            cap_sum["Potential_GM_%"] * 100).round(2).astype(str) + "%"
+        st.dataframe(cap_sum_show, use_container_width=True)
+
+        st.markdown("**Capacity Gap Trend (Hours)**")
+        cap_chart = cap_sum.groupby("Month", as_index=False)["Gap_Hours"].sum()
+        gap_chart = alt.Chart(cap_chart).mark_bar().encode(
+            x=alt.X("Month:N", title="Month"),
+            y=alt.Y("Gap_Hours:Q", title="Gap Hours (Capacity - Required)"),
+            color=alt.condition(alt.datum.Gap_Hours < 0, alt.value(
+                "#d62728"), alt.value("#2ca02c")),
+            tooltip=[
+                alt.Tooltip("Month:N"),
+                alt.Tooltip("Gap_Hours:Q", format=",.2f"),
+            ],
+        ).properties(height=240)
+        st.altair_chart(gap_chart, use_container_width=True)
