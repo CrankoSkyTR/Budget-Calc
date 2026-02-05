@@ -547,7 +547,7 @@ with tab_setup:
             key="cost_defaults_editor",
             column_config={
                 "Account": st.column_config.SelectboxColumn("Account", options=["All"] + ACCOUNTS),
-                "Language": st.column_config.SelectboxColumn("Language"),
+                "Language": st.column_config.TextColumn("Language"),
                 "Salary": st.column_config.NumberColumn("Salary (TRY)", min_value=0.0, step=100.0, format="%.2f"),
                 "OSS": st.column_config.NumberColumn("OSS (TRY)", min_value=0.0, step=10.0, format="%.2f"),
                 "Food": st.column_config.NumberColumn("Food (TRY)", min_value=0.0, step=10.0, format="%.2f"),
