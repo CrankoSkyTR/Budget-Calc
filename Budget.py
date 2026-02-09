@@ -769,6 +769,9 @@ with tab_results:
             if "Month" not in out.columns:
                 out["Month"] = ""
             out["Month"] = out["Month"].astype(str)
+            # Prevent suffix collisions on repeated calls/reruns
+            if "_Result_FX" in out.columns:
+                out = out.drop(columns=["_Result_FX"])
             out["_Result_FX"] = 1.0
             if target_ccy != "TRY" and not fx_for_view.empty:
                 f = fx_for_view[fx_for_view["Currency"] == target_ccy][["Month", "FX_Rate"]].drop_duplicates(
@@ -776,6 +779,17 @@ with tab_results:
                 )
                 f = f.rename(columns={"FX_Rate": "_Result_FX"})
                 out = out.merge(f, on="Month", how="left")
+                if "_Result_FX_x" in out.columns or "_Result_FX_y" in out.columns:
+                    out["_Result_FX"] = pd.to_numeric(
+                        out.get("_Result_FX_y"), errors="coerce"
+                    ).combine_first(
+                        pd.to_numeric(out.get("_Result_FX_x"), errors="coerce")
+                    )
+                    drop_cols = [c for c in ["_Result_FX_x", "_Result_FX_y"] if c in out.columns]
+                    if drop_cols:
+                        out = out.drop(columns=drop_cols)
+                if "_Result_FX" not in out.columns:
+                    out["_Result_FX"] = 1.0
                 out["_Result_FX"] = pd.to_numeric(
                     out["_Result_FX"], errors="coerce").fillna(1.0)
             elif target_ccy != "TRY":
