@@ -741,6 +741,56 @@ with tab_results:
     if base_result.empty:
         st.info("No calculable rows yet. Please fill Setup + Monthly Plan.")
     else:
+        # Display currency for financial outputs in Results
+        result_ccy = st.selectbox(
+            "Result Currency",
+            options=["TRY", "EUR", "USD"],
+            index=0,
+            key="result_currency_view",
+        )
+
+        fx_for_view = st.session_state.fx_rates_df.copy() if "fx_rates_df" in st.session_state else pd.DataFrame(
+            columns=["Month", "Currency", "FX_Rate"]
+        )
+        if not fx_for_view.empty:
+            for c, default in [("Month", ""), ("Currency", "TRY"), ("FX_Rate", 1.0)]:
+                if c not in fx_for_view.columns:
+                    fx_for_view[c] = default
+            fx_for_view = fx_for_view[["Month", "Currency", "FX_Rate"]].copy()
+            fx_for_view["Month"] = fx_for_view["Month"].astype(str)
+            fx_for_view["Currency"] = fx_for_view["Currency"].astype(str)
+            fx_for_view["FX_Rate"] = pd.to_numeric(
+                fx_for_view["FX_Rate"], errors="coerce").fillna(1.0)
+
+        def apply_currency_view(df_in: pd.DataFrame, target_ccy: str) -> pd.DataFrame:
+            out = df_in.copy()
+            if out.empty:
+                return out
+            if "Month" not in out.columns:
+                out["Month"] = ""
+            out["Month"] = out["Month"].astype(str)
+            out["_Result_FX"] = 1.0
+            if target_ccy != "TRY" and not fx_for_view.empty:
+                f = fx_for_view[fx_for_view["Currency"] == target_ccy][["Month", "FX_Rate"]].drop_duplicates(
+                    subset=["Month"], keep="last"
+                )
+                f = f.rename(columns={"FX_Rate": "_Result_FX"})
+                out = out.merge(f, on="Month", how="left")
+                out["_Result_FX"] = pd.to_numeric(
+                    out["_Result_FX"], errors="coerce").fillna(1.0)
+            elif target_ccy != "TRY":
+                out["_Result_FX"] = 1.0
+            return out
+
+        def convert_money_cols(df_in: pd.DataFrame, cols: list, fx_col: str = "_Result_FX") -> pd.DataFrame:
+            out = df_in.copy()
+            fxv = pd.to_numeric(out.get(fx_col, 1.0), errors="coerce").fillna(1.0)
+            fxv = fxv.replace(0, np.nan).fillna(1.0)
+            for c in cols:
+                if c in out.columns:
+                    out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0.0) / fxv
+            return out
+
         # Scenario Compare (Base vs What-if)
         with st.expander("Scenario Compare (Base vs What-if)", expanded=False):
             enable_whatif = st.checkbox("Enable What-if Scenario", value=False)
@@ -796,27 +846,36 @@ with tab_results:
                 wf_cfg,
             )
 
-        total_revenue = result["Revenue"].sum()
-        total_agent = result["Agent_Cost"].sum()
-        total_overhead = result["Overhead_Cost"].sum()
-        total_cost = result["Total Cost"].sum()
-        total_gm = result["GM"].sum()
+        result_view = apply_currency_view(result, result_ccy)
+        result_view = convert_money_cols(
+            result_view, ["Revenue", "Agent_Cost", "Overhead_Cost", "Total Cost", "GM"]
+        )
+
+        total_revenue = result_view["Revenue"].sum()
+        total_agent = result_view["Agent_Cost"].sum()
+        total_overhead = result_view["Overhead_Cost"].sum()
+        total_cost = result_view["Total Cost"].sum()
+        total_gm = result_view["GM"].sum()
         total_gm_pct = (
             total_gm / total_revenue) if total_revenue != 0 else (-1.0 if total_gm < 0 else 0.0)
 
         r1c1, r1c2, r1c3 = st.columns(3)
-        r1c1.metric("Revenue", f"{total_revenue:,.2f}")
-        r1c2.metric("Agent Cost", f"{total_agent:,.2f}")
-        r1c3.metric("Overhead Cost", f"{total_overhead:,.2f}")
+        r1c1.metric(f"Revenue ({result_ccy})", f"{total_revenue:,.2f}")
+        r1c2.metric(f"Agent Cost ({result_ccy})", f"{total_agent:,.2f}")
+        r1c3.metric(f"Overhead Cost ({result_ccy})", f"{total_overhead:,.2f}")
         r2c1, r2c2, r2c3 = st.columns(3)
-        r2c1.metric("Total Cost", f"{total_cost:,.2f}")
-        r2c2.metric("GM", f"{total_gm:,.2f}")
+        r2c1.metric(f"Total Cost ({result_ccy})", f"{total_cost:,.2f}")
+        r2c2.metric(f"GM ({result_ccy})", f"{total_gm:,.2f}")
         r2c3.metric("GM %", f"{total_gm_pct*100:,.2f}%")
 
         if enable_whatif and whatif_result is not None and not whatif_result.empty:
-            wf_revenue = whatif_result["Revenue"].sum()
-            wf_total_cost = whatif_result["Total Cost"].sum()
-            wf_gm = whatif_result["GM"].sum()
+            whatif_view = apply_currency_view(whatif_result, result_ccy)
+            whatif_view = convert_money_cols(
+                whatif_view, ["Revenue", "Total Cost", "GM"]
+            )
+            wf_revenue = whatif_view["Revenue"].sum()
+            wf_total_cost = whatif_view["Total Cost"].sum()
+            wf_gm = whatif_view["GM"].sum()
             wf_gm_pct = (
                 wf_gm / wf_revenue) if wf_revenue != 0 else (-1.0 if wf_gm < 0 else 0.0)
             cmp = pd.DataFrame({
@@ -846,7 +905,7 @@ with tab_results:
 
         st.divider()
         st.markdown("**Trend (Monthly)**")
-        trend = result.groupby("Month", as_index=False)[
+        trend = result_view.groupby("Month", as_index=False)[
             ["Revenue", "Total Cost", "GM"]].sum().sort_values("Month")
         trend["GM_%"] = gm_pct_from_series(trend["GM"], trend["Revenue"])
 
@@ -855,7 +914,7 @@ with tab_results:
         trend_all = trend_base.copy()
 
         if enable_whatif and whatif_result is not None and not whatif_result.empty:
-            wf_trend = whatif_result.groupby("Month", as_index=False)[
+            wf_trend = whatif_view.groupby("Month", as_index=False)[
                 ["Revenue", "Total Cost", "GM"]].sum().sort_values("Month")
             wf_trend["GM_%"] = gm_pct_from_series(
                 wf_trend["GM"], wf_trend["Revenue"])
@@ -870,7 +929,7 @@ with tab_results:
         )
         chart_amt = alt.Chart(trend_amt).mark_line(point=True).encode(
             x=alt.X("Month:N", title="Month"),
-            y=alt.Y("Value:Q", title="TRY"),
+            y=alt.Y("Value:Q", title=result_ccy),
             color=alt.Color("Metric:N", title="Metric"),
             strokeDash=alt.StrokeDash("Scenario:N", title="Scenario"),
             tooltip=[
@@ -896,7 +955,9 @@ with tab_results:
 
         st.divider()
         st.markdown("**Detailed Results**")
-        show = result.copy()
+        show = result_view.copy()
+        if "_Result_FX" in show.columns:
+            show = show.drop(columns=["_Result_FX"])
         show["COLA_%"] = (show["COLA_%"] * 100).round(2).astype(str) + "%"
         show["GM_%"] = (show["GM_%"] * 100).round(2).astype(str) + "%"
 
@@ -921,7 +982,7 @@ with tab_results:
         st.dataframe(show, use_container_width=True)
 
         st.markdown("**Summary by Account**")
-        s1 = result.groupby("Account", as_index=False)[
+        s1 = result_view.groupby("Account", as_index=False)[
             ["Revenue", "Total Cost", "GM"]].sum()
         s1["GM_%"] = gm_pct_from_series(s1["GM"], s1["Revenue"])
         s1_show = s1.copy()
@@ -931,7 +992,7 @@ with tab_results:
         st.dataframe(s1_show, use_container_width=True)
 
         st.markdown("**Summary by Account & Language**")
-        s2 = result.groupby(["Account", "Language"], as_index=False)[
+        s2 = result_view.groupby(["Account", "Language"], as_index=False)[
             ["Revenue", "Total Cost", "GM"]].sum()
         s2["GM_%"] = gm_pct_from_series(s2["GM"], s2["Revenue"])
         s2_show = s2.copy()
