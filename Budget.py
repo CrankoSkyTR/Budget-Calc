@@ -547,7 +547,7 @@ with tab_setup:
             key="cost_defaults_editor",
             column_config={
                 "Account": st.column_config.SelectboxColumn("Account", options=["All"] + ACCOUNTS),
-                "Language": st.column_config.TextColumn("Language"),
+                "Language": st.column_config.SelectboxColumn("Language", options=DEFAULT_LANGUAGES),
                 "Salary": st.column_config.NumberColumn("Salary (TRY)", min_value=0.0, step=100.0, format="%.2f"),
                 "OSS": st.column_config.NumberColumn("OSS (TRY)", min_value=0.0, step=10.0, format="%.2f"),
                 "Food": st.column_config.NumberColumn("Food (TRY)", min_value=0.0, step=10.0, format="%.2f"),
@@ -1127,8 +1127,11 @@ with tab_capacity:
             cfg,
         )
         if not cap_budget.empty:
-            merge_cols = ["Month", "Account", "Language",
-                          "Adj. Unit Price", "FX_Rate", "Total Cost"]
+            merge_cols = [
+                "Month", "Account", "Language",
+                "Adj. Unit Price", "FX_Rate", "Total Cost",
+                "Billing_Mode", "Revenue", "GM", "Billable_Hours",
+            ]
             merge_cols = [c for c in merge_cols if c in cap_budget.columns]
             cap_df = cap_df.merge(
                 cap_budget[merge_cols],
@@ -1139,6 +1142,10 @@ with tab_capacity:
             cap_df["Adj. Unit Price"] = 0.0
             cap_df["FX_Rate"] = 1.0
             cap_df["Total Cost"] = 0.0
+            cap_df["Billing_Mode"] = "Unit Price × Production Hours"
+            cap_df["Revenue"] = 0.0
+            cap_df["GM"] = 0.0
+            cap_df["Billable_Hours"] = 0.0
 
         cap_df["Adj. Unit Price"] = pd.to_numeric(
             cap_df.get("Adj. Unit Price"), errors="coerce").fillna(0.0)
@@ -1146,29 +1153,44 @@ with tab_capacity:
             cap_df.get("FX_Rate"), errors="coerce").fillna(1.0)
         cap_df["Total Cost"] = pd.to_numeric(
             cap_df.get("Total Cost"), errors="coerce").fillna(0.0)
-        cap_df["Rate_TRY_per_Hour"] = cap_df["Adj. Unit Price"] * \
-            cap_df["FX_Rate"]
-        cap_df["Potential_Revenue_TRY"] = cap_df["Required_Hours"] * \
-            cap_df["Rate_TRY_per_Hour"]
-        cap_df["Invoiceable_Revenue_TRY"] = cap_df["Invoiceable_Hours"] * \
-            cap_df["Rate_TRY_per_Hour"]
-        cap_df["Lost_Revenue_TRY"] = (
-            cap_df["Potential_Revenue_TRY"] - cap_df["Invoiceable_Revenue_TRY"]).clip(lower=0)
+        cap_df["Revenue"] = pd.to_numeric(
+            cap_df.get("Revenue"), errors="coerce").fillna(0.0)
+        cap_df["Billable_Hours"] = pd.to_numeric(
+            cap_df.get("Billable_Hours"), errors="coerce").fillna(0.0)
+
+        cap_df["Rate_TRY_per_Hour"] = np.where(
+            cap_df["Billable_Hours"] == 0,
+            cap_df["Adj. Unit Price"] * cap_df["FX_Rate"],
+            cap_df["Revenue"] / cap_df["Billable_Hours"],
+        )
+        is_prod_mode = cap_df["Billing_Mode"] != "Unit Price × FTE"
+        cap_df["Potential_Revenue_TRY"] = np.where(
+            is_prod_mode,
+            cap_df["Required_Hours"] * cap_df["Rate_TRY_per_Hour"],
+            cap_df["Revenue"],
+        )
+        cap_df["Invoiceable_Revenue_TRY"] = np.where(
+            is_prod_mode,
+            cap_df["Invoiceable_Hours"] * cap_df["Rate_TRY_per_Hour"],
+            cap_df["Revenue"],
+        )
+        cap_df["Lost_Revenue_TRY"] = np.where(
+            is_prod_mode,
+            (cap_df["Potential_Revenue_TRY"] -
+             cap_df["Invoiceable_Revenue_TRY"]).clip(lower=0),
+            0.0,
+        )
         cap_df["Cost_per_Capacity_Hour"] = np.where(
             cap_df["Eff_Capacity_Hours"] == 0, 0.0, cap_df["Total Cost"] /
             cap_df["Eff_Capacity_Hours"]
         )
         cap_df["Idle_Cost_TRY"] = cap_df["Idle_Hours"] * \
             cap_df["Cost_per_Capacity_Hour"]
-        cap_df["Actual_GM_TRY"] = cap_df["Invoiceable_Revenue_TRY"] - \
-            cap_df["Total Cost"]
+        cap_df["Actual_GM_TRY"] = cap_df["Revenue"] - cap_df["Total Cost"]
         cap_df["Potential_GM_TRY"] = cap_df["Potential_Revenue_TRY"] - \
             cap_df["Total Cost"]
-        cap_df["Actual_GM_%"] = np.where(
-            cap_df["Invoiceable_Revenue_TRY"] != 0,
-            cap_df["Actual_GM_TRY"] / cap_df["Invoiceable_Revenue_TRY"],
-            np.where(cap_df["Actual_GM_TRY"] < 0, -1.0, 0.0),
-        )
+        cap_df["Actual_GM_%"] = gm_pct_from_series(
+            cap_df["Actual_GM_TRY"], cap_df["Revenue"])
         cap_df["Potential_GM_%"] = np.where(
             cap_df["Potential_Revenue_TRY"] != 0,
             cap_df["Potential_GM_TRY"] / cap_df["Potential_Revenue_TRY"],
@@ -1181,7 +1203,7 @@ with tab_capacity:
         k2.metric("Total Idle Hours", f"{cap_df['Idle_Hours'].sum():,.2f}")
         k3.metric("Lost Invoice Revenue (TRY)",
                   f"{cap_df['Lost_Revenue_TRY'].sum():,.2f}")
-        total_actual_rev = cap_df["Invoiceable_Revenue_TRY"].sum()
+        total_actual_rev = cap_df["Revenue"].sum()
         total_actual_gm = cap_df["Actual_GM_TRY"].sum()
         total_actual_gm_pct = (
             total_actual_gm / total_actual_rev
@@ -1224,18 +1246,14 @@ with tab_capacity:
             [
                 "Eff_Capacity_Hours", "Required_Hours", "Invoiceable_Hours",
                 "Over_Demand_Hours", "Idle_Hours", "Gap_Hours", "Buffer_Hours",
-                "Potential_Revenue_TRY", "Invoiceable_Revenue_TRY", "Lost_Revenue_TRY", "Idle_Cost_TRY", "Total Cost"
+                "Potential_Revenue_TRY", "Invoiceable_Revenue_TRY", "Lost_Revenue_TRY", "Idle_Cost_TRY", "Total Cost", "Revenue"
             ]
         ].sum()
-        cap_sum["Actual_GM_TRY"] = cap_sum["Invoiceable_Revenue_TRY"] - \
-            cap_sum["Total Cost"]
+        cap_sum["Actual_GM_TRY"] = cap_sum["Revenue"] - cap_sum["Total Cost"]
         cap_sum["Potential_GM_TRY"] = cap_sum["Potential_Revenue_TRY"] - \
             cap_sum["Total Cost"]
-        cap_sum["Actual_GM_%"] = np.where(
-            cap_sum["Invoiceable_Revenue_TRY"] != 0,
-            cap_sum["Actual_GM_TRY"] / cap_sum["Invoiceable_Revenue_TRY"],
-            np.where(cap_sum["Actual_GM_TRY"] < 0, -1.0, 0.0),
-        )
+        cap_sum["Actual_GM_%"] = gm_pct_from_series(
+            cap_sum["Actual_GM_TRY"], cap_sum["Revenue"])
         cap_sum["Potential_GM_%"] = np.where(
             cap_sum["Potential_Revenue_TRY"] != 0,
             cap_sum["Potential_GM_TRY"] / cap_sum["Potential_Revenue_TRY"],
